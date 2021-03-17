@@ -1,0 +1,75 @@
+#!/bin/bash
+
+preset=testnet
+preset2=TEST_NET
+assembly=dual
+
+host=$1
+customer_pubkey=$2
+
+echo "warning: overriding args with dummy input"
+host=nem.mm-studios.com
+customer_pubkey=50AC6D29B7E0BC919D4BC6AC2948E5997D798982A02EBE37BB919DBB7975C037
+
+rm target -rf
+
+customer_addr=`symbol-cli converter publicKeyToAddress -n $preset2 -p $customer_pubkey | sed "s/-//g"`
+
+
+cat << EOF > supernode.yml
+nodes:
+  - rewardProgram: SuperNode
+    host: $host
+    voting: true
+EOF
+
+
+symbol-bootstrap config -p $preset -a $assembly -c supernode.yml --noPassword
+
+rm supernode.yml
+
+pushd target > /dev/null
+
+oldpubkey=`cat addresses.yml | grep "main:" -A2 | tail -n1 | sed "s/.*publicKey: \(.*\)/\1/"`
+echo "replacing $oldpubkey with $customer_pubkey"
+sed -i "s/$oldpubkey/$customer_pubkey/" nodes/api-node/cert/metadata.yml
+sed -i "s/$oldpubkey/$customer_pubkey/" nodes/api-node/broker-config/resources/peers-p2p.json
+sed -i "s/$oldpubkey/$customer_pubkey/" nodes/api-node/broker-config/resources/peers-api.json
+sed -i "s/$oldpubkey/$customer_pubkey/" nodes/api-node/server-config/resources/peers-p2p.json
+sed -i "s/$oldpubkey/$customer_pubkey/" nodes/api-node/server-config/resources/peers-api.json
+
+cat addresses.yml  | grep "main:" -B 100 > x
+cat << EOF >> x
+            privateKey:
+            publicKey: $customer_pubkey
+            address: $customer_addr
+EOF
+cat addresses.yml  | grep "transport:" -A1000000 >> x
+mv x addresses.yml
+popd > /dev/null
+
+
+unsigned=`symbol-bootstrap link --noPassword --useKnownRestGateways | grep "=BEGIN TX====" -A1 | tail -n1`
+
+cat << EOF
+==========================================================================
+Instructions:
+
+Send to the customer the following instructions:
+
+Execute the command:
+symbol-cli transaction cosign
+
+Select "transaction payload(for off-chain tx)" when prompted.
+Paste the following blob:
+$unsigned
+
+Enter the wallet password when asked.
+
+The last output of the command will look like:
+Co-signed transaction:{"parentHash":"B7E0AB247F11E8F454C04C41B338FB1029C8407224E58271D4B987DC4D455E46","signature":"0662BA5056BA5CA3DB3358A601AA0DD195C3B7ACC007CC83AF69E92F10360645CCE53FE5215896A2D1F79CC5F9BF5A035662905C853C7E38E30F9EBB7FE7BC0F","signerPublicKey":"50AC6D29B7E0BC919D4BC6AC2948E5997D798982A02EBE37BB919DBB7975C037","version":{"lower":0,"higher":0}}
+
+send over to allnodes.
+
+EOF
+
