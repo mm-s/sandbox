@@ -1,0 +1,42 @@
+diff --git a/src/service/AnnounceService.ts b/src/service/AnnounceService.ts
+index 850baa0..d4f8a3a 100644
+--- a/src/service/AnnounceService.ts
++++ b/src/service/AnnounceService.ts
+@@ -183,6 +183,21 @@ export class AnnounceService {
+                 logger.info(`There are not transactions to announce for node ${nodeAccount.name}`);
+                 continue;
+             }
++
++            let aggregateTransaction = AggregateTransaction.createBonded(
++                        deadline,
++                        transactions.map((t) => t.toAggregate(mainAccount)),
++                        networkType,
++                        [],
++                        defaultMaxFee,
++            );
++            aggregateTransaction = aggregateTransaction.setMaxFeeForAggregate(minFeeMultiplier, 0);
++	    let ser=aggregateTransaction.serialize();
++console.log("=BEGIN TX===========================");
++console.log(ser);
++console.log("=END TX===========================");
++continue;
++/*
+             const shouldAnnounce: boolean =
+                 ready ||
+                 (
+@@ -199,7 +214,6 @@ export class AnnounceService {
+                 logger.info(`Ignoring transaction for node ${nodeAccount.name}`);
+                 continue;
+             }
+-
+             if (multisigAccountInfo) {
+                 logger.info(
+                     `The node's main account is a multig account with Address: ${
+@@ -343,6 +357,7 @@ export class AnnounceService {
+                     }
+                 }
+             }
++*/
+         }
+ 
+         listener.close();
