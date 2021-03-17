@@ -10,8 +10,9 @@ customer_pubkey=$2
 echo "warning: overriding args with dummy input"
 host=nem.mm-studios.com
 customer_pubkey=50AC6D29B7E0BC919D4BC6AC2948E5997D798982A02EBE37BB919DBB7975C037
-
 rm target -rf
+
+[[ -d target ]] && echo "target dir already exists." && exit 1
 
 customer_addr=`symbol-cli converter publicKeyToAddress -n $preset2 -p $customer_pubkey | sed "s/-//g"`
 
