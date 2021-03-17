@@ -72,7 +72,7 @@ Enter the wallet password when asked.
 The last output of the command will look like:
 Co-signed transaction:{"parentHash":"B7E0AB247F11E8F454C04C41B338FB1029C8407224E58271D4B987DC4D455E46","signature":"0662BA5056BA5CA3DB3358A601AA0DD195C3B7ACC007CC83AF69E92F10360645CCE53FE5215896A2D1F79CC5F9BF5A035662905C853C7E38E30F9EBB7FE7BC0F","signerPublicKey":"50AC6D29B7E0BC919D4BC6AC2948E5997D798982A02EBE37BB919DBB7975C037","version":{"lower":0,"higher":0}}
 
-send over to allnodes.
+send over to business or assemble tx and announce.
 
 
 
