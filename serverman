@@ -10,49 +10,163 @@ customer_pubkey=$2
 echo "warning: overriding args with dummy input"
 host=nem.mm-studios.com
 customer_pubkey=50AC6D29B7E0BC919D4BC6AC2948E5997D798982A02EBE37BB919DBB7975C037
-rm target -rf
 
-[[ -d target ]] && echo "target dir already exists." && exit 1
+if [[ ! -x `which symbol-cli` ]]; then
+	echo "Please install symbol-cli first. https://docs.symbolplatform.com/cli.html#cli"
+	echo "tl;dr;"
+	echo "sudo npn -g install symbol-cli"
+	exit 1
+fi
 
-customer_addr=`symbol-cli converter publicKeyToAddress -n $preset2 -p $customer_pubkey | sed "s/-//g"`
+
+[[ -d server ]] && echo "server dir already exists." && exit 1
 
 
-cat << EOF > supernode.yml
+openssl="openssl"
+openssl_req="openssl req -batch"
+openssl_ca="openssl ca -batch"
+
+function skder {
+    sk=$1
+    file=$2
+    prefix="302e020100300506032b657004220420"
+    lsk=`echo ${sk} | tr '[:upper:]' '[:lower:]'`
+    echo ${prefix}${lsk} | xxd -r -p > $file
+}
+
+
+function certGenerate_leg1 {
+	dir=$1
+	sk_transport=$2
+	shift
+	[[ -d $dir ]] && echo "Error. dir $dir exists." && exit 1
+	mkdir $dir
+	pushd $dir > /dev/null
+		#ca.cnf
+		cat <<EOF>ca.cnf
+[ca]
+default_ca = CA_default
+
+[CA_default]
+new_certs_dir = ./new_certs
+database = index.txt
+serial   = serial.dat
+
+private_key = ca.key.pem
+certificate = ca.cert.pem
+
+policy = policy_catapult
+
+[policy_catapult]
+commonName              = supplied
+
+[req]
+prompt = no
+distinguished_name = dn
+
+[dn]
+CN = peer-node-1-account
+EOF
+		#node.cnf
+		cat <<EOF> node.cnf
+[req]
+prompt = no
+distinguished_name = dn
+
+[dn]
+CN = peer-node-1
+EOF
+#node.cnf -> private svr
+
+		mkdir new_certs && chmod 700 new_certs
+		touch index.txt
+
+		# create node key
+		if [[ "_$sk_transport" == "_" ]]; then
+			echo "Warning: generating transport cert with new random private key"
+			$openssl genpkey -out node.key.pem -outform PEM -algorithm ed25519
+		else
+			skder $sk_transport node.der
+			cat node.der | $openssl pkey -inform DER -outform PEM -out node.key.pem
+			rm node.der
+		fi
+#node.key.pem --> private-server
+		$openssl pkey -inform pem -in node.key.pem -text -noout
+
+		# create request
+		$openssl_req -config node.cnf -key node.key.pem -new -out node.csr.pem
+		$openssl_req  -text -noout -verify -in node.csr.pem
+#node.csr.pem --> public
+
+#		# CA side
+#		# create serial
+#		$openssl rand -hex 19 > ./serial.dat
+
+#		# sign cert for 375 days
+#		$openssl_ca -config ca.cnf -days 375 -notext -in node.csr.pem -out node.crt.pem
+##node.crt.pem -->
+#		$openssl verify -CAfile ca.cert.pem node.crt.pem
+#
+#		# finally create full crt
+#		cat node.crt.pem ca.cert.pem > node.full.crt.pem
+	popd > /dev/null
+}
+
+
+mkdir server
+pushd server > /dev/null
+
+	certGenerate_leg1 certs
+	rm -rf msg1
+	mkdir -p msg1
+	cp certs/node.csr.pem msg1/
+
+
+	customer_addr=`symbol-cli converter publicKeyToAddress -n $preset2 -p $customer_pubkey | sed "s/-//g"`
+
+
+
+	cat << EOF > supernode.yml
 nodes:
   - rewardProgram: SuperNode
     host: $host
     voting: true
 EOF
+	symbol-bootstrap config -p $preset -a $assembly -c supernode.yml --noPassword
+	rm supernode.yml
+
+	pushd target > /dev/null
 
 
-symbol-bootstrap config -p $preset -a $assembly -c supernode.yml --noPassword
 
-rm supernode.yml
+	oldpubkey=`cat addresses.yml | grep "main:" -A2 | tail -n1 | sed "s/.*publicKey: \(.*\)/\1/"`
+	echo "replacing $oldpubkey with $customer_pubkey"
+	sed -i "s/$oldpubkey/$customer_pubkey/" nodes/api-node/cert/metadata.yml
+	sed -i "s/$oldpubkey/$customer_pubkey/" nodes/api-node/broker-config/resources/peers-p2p.json
+	sed -i "s/$oldpubkey/$customer_pubkey/" nodes/api-node/broker-config/resources/peers-api.json
+	sed -i "s/$oldpubkey/$customer_pubkey/" nodes/api-node/server-config/resources/peers-p2p.json
+	sed -i "s/$oldpubkey/$customer_pubkey/" nodes/api-node/server-config/resources/peers-api.json
 
-pushd target > /dev/null
-
-oldpubkey=`cat addresses.yml | grep "main:" -A2 | tail -n1 | sed "s/.*publicKey: \(.*\)/\1/"`
-echo "replacing $oldpubkey with $customer_pubkey"
-sed -i "s/$oldpubkey/$customer_pubkey/" nodes/api-node/cert/metadata.yml
-sed -i "s/$oldpubkey/$customer_pubkey/" nodes/api-node/broker-config/resources/peers-p2p.json
-sed -i "s/$oldpubkey/$customer_pubkey/" nodes/api-node/broker-config/resources/peers-api.json
-sed -i "s/$oldpubkey/$customer_pubkey/" nodes/api-node/server-config/resources/peers-p2p.json
-sed -i "s/$oldpubkey/$customer_pubkey/" nodes/api-node/server-config/resources/peers-api.json
-
-cat addresses.yml  | grep "main:" -B 100 > x
-cat << EOF >> x
+	cat addresses.yml  | grep "main:" -B 100 > x
+	cat << EOF >> x
             privateKey:
             publicKey: $customer_pubkey
             address: $customer_addr
 EOF
-cat addresses.yml  | grep "transport:" -A1000000 >> x
-mv x addresses.yml
-popd > /dev/null
+
+	cat addresses.yml  | grep "transport:" -A1000000 >> x
+	mv x addresses.yml
+	popd > /dev/null
+
+	#unsigned=`symbol-bootstrap link --noPassword --useKnownRestGateways | grep "=BEGIN TX====" -A1 | tail -n1`
+	unsigned="FFFFFFFFFFFFFFFFFFFFFTXLINKS"
+	echo $unsigned > msg1/unsigned_tx
 
 
-unsigned=`symbol-bootstrap link --noPassword --useKnownRestGateways | grep "=BEGIN TX====" -A1 | tail -n1`
 
-cat << EOF
+	exit 0
+
+	cat << EOF
 ==========================================================================
 Instructions:
 
@@ -73,4 +187,8 @@ Co-signed transaction:{"parentHash":"B7E0AB247F11E8F454C04C41B338FB1029C8407224E
 send over to allnodes.
 
 EOF
+
+}
+
+
 

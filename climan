@@ -1,0 +1,114 @@
+#!/bin/bash
+
+msg1dir=$1
+sk_main=$2
+msg1dir=server/msg1
+sk_main="43B3FA82BFBFCE3A52F3B14F60CDDF829EABF719C7818CAF0BD15060525A76FE"
+
+[[ -d cli ]] && echo "directory cli already exists. Aborting." && exit 1
+
+openssl="openssl"
+openssl_req="openssl req -batch"
+openssl_ca="openssl ca -batch"
+
+
+function skder {
+    sk=$1
+    file=$2
+    prefix="302e020100300506032b657004220420"
+    lsk=`echo ${sk} | tr '[:upper:]' '[:lower:]'`
+    echo ${prefix}${lsk} | xxd -r -p > $file
+}
+
+function certGenerate_leg2 {
+	dir=$1
+	csr=$2
+	sk_main=$3
+	shift
+	mkdir -p $dir
+	pushd $dir > /dev/null
+		#ca.cnf
+		cat <<EOF>ca.cnf
+[ca]
+default_ca = CA_default
+
+[CA_default]
+new_certs_dir = ./new_certs
+database = index.txt
+serial   = serial.dat
+
+private_key = ca.key.pem
+certificate = ca.cert.pem
+
+policy = policy_catapult
+
+[policy_catapult]
+commonName              = supplied
+
+[req]
+prompt = no
+distinguished_name = dn
+
+[dn]
+CN = peer-node-1-account
+EOF
+
+#ca.cnf --> public
+		mkdir new_certs && chmod 700 new_certs
+		touch index.txt
+
+		# create CA key
+		if [[ "_$sk_main" == "_" ]]; then
+			echo "Warning: generating main cert with new random private key"
+			$openssl genpkey -out ca.key.pem -outform PEM -algorithm ed25519
+		else
+			skder $sk_main ca.der
+			cat ca.der | $openssl pkey -inform DER -outform PEM -out ca.key.pem
+			rm ca.der
+		fi
+
+#ca.key.pem  --> secret
+
+		$openssl pkey -inform pem -in ca.key.pem -text -noout
+		$openssl pkey -in ca.key.pem -pubout -out ca.pubkey.pem
+#ca.pubkey.pem -- > public
+
+		# create CA cert and self-sign it
+		$openssl_req -config ca.cnf -keyform PEM -key ca.key.pem -new -x509 -days 7300 -out ca.cert.pem
+		$openssl x509 -in ca.cert.pem  -text -noout
+#ca.cert.pem --> public
+
+		# CA side
+		# create serial
+		$openssl rand -hex 19 > ./serial.dat
+
+		# sign cert for 375 days
+		$openssl_ca -config ca.cnf -days 375 -notext -in $csr -out node.crt.pem
+
+		$openssl verify -CAfile ca.cert.pem node.crt.pem
+
+		# finally create full crt
+		cat node.crt.pem ca.cert.pem > new_certs/node.full.crt.pem
+		rm node.crt.pem
+		
+	popd > /dev/null
+}
+
+csr=`realpath $msg1dir/node.csr.pem`
+
+mkdir cli
+pushd cli > /dev/null
+	
+	certGenerate_leg2 certs $csr $sk_main
+
+	rm -rf msg2
+	mkdir -p msg2
+	cp certs/new_certs/node.full.crt.pem msg2/
+
+	#main_addr=`symbol-cli converter publicKeyToAddress -n $preset2 -p $main_pubkey | sed "s/-//g"`
+
+	#unsigned_tx=`cat $msg1dir/unsigned_tx`
+
+popd > /dev/null
+
+
